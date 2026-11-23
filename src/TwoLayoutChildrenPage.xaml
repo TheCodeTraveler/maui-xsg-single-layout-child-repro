@@ -5,7 +5,7 @@
              x:Class="Repro.TwoLayoutChildrenPage">
     <VerticalStackLayout x:Name="Host">
         <local:Holder.Items>
-            <VerticalStackLayout /><VerticalStackLayout />
+            <VerticalStackLayout><Label Text="one" /></VerticalStackLayout><VerticalStackLayout><Label Text="one" /></VerticalStackLayout>
         </local:Holder.Items>
     </VerticalStackLayout>
 </ContentPage>

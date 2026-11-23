@@ -17,13 +17,13 @@ cd src && dotnet run -- bug
 - Observed: `InvalidCastException: Unable to cast object of type 'Microsoft.Maui.Controls.VerticalStackLayout' to type 'System.Collections.Generic.IList`1[Microsoft.Maui.Controls.View]'.`
 - Expected: the child is added to the list (`Count == 1`), as with a `Label` child, two children, or XamlC.
 
-Versions: .NET SDK 11.0.100, `net11.0`, Microsoft.Maui.Controls 11.0.10. No workload or device needed: the defect is in generated C#.
+Versions: .NET SDK 11.0.100, `net11.0`, Microsoft.Maui.Controls 11.0.10. The project references the Microsoft.Maui.Controls package only (no `UseMaui`), so no MAUI workload or device is needed: the defect is in generated C#.
 
-## Legs (`.github/workflows/repro.yml`, ubuntu-latest)
+## Legs (`.github/workflows/repro.yml`, one job on ubuntu-24.04)
 
 | Leg | Cases | Proves |
 |---|---|---|
-| `bug` | `SingleLayoutChildPage`, `SingleGridChildPage` (attached `IList<View>`), `PocoSingleGridChildPage` (CLR `IList<View>` property) | each throws the exact exception above; the generated `*.xsg.cs` contains the bad cast |
+| `bug` | `SingleLayoutChildPage`, `SingleGridChildPage` (attached `IList<View>`), `PocoSingleGridChildPage` (CLR `IList<View>` property) | each throws `InvalidCastException` from the generated `<Page>.InitializeComponent`, naming the child's type; the generated `*.xsg.cs` contains the bad cast |
 | `control` | single `Label` child, two Layout children, single Layout child with `Inflator="XamlC"`, CLR property with XamlC | each is added (`Count` 1 or 2) |
 | `workaround` | single Layout child wrapped in a `ContentView` | the child is added |
 

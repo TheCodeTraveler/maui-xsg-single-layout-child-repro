@@ -4,65 +4,89 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
 jobs:
-  leg:
-    name: ${{ matrix.leg }} leg
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        leg: [bug, control, workaround]
+  repro:
+    name: bug, control and workaround legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup .NET SDK from global.json
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
 
-      - name: Restore
-        run: dotnet restore src/Repro.csproj
-
       - name: Build
-        run: dotnet build src/Repro.csproj -c Release --no-restore
+        run: dotnet build src/Repro.csproj -c Release
 
-      - name: Run ${{ matrix.leg }} leg
-        id: run
+      - name: Run the three legs
         working-directory: src
+        shell: bash
         run: |
-          set +e
           mkdir -p ../artifacts
-          dotnet run -c Release --no-build -- ${{ matrix.leg }} 2>&1 | tee ../artifacts/${{ matrix.leg }}.log
-          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          for leg in bug control workaround; do
+            set +e
+            dotnet run -c Release --no-build -- $leg 2>&1 | tee ../artifacts/$leg.log
+            echo "${PIPESTATUS[0]}" > ../artifacts/$leg.exit
+            set -e
+          done
           cp -r results ../artifacts/ 2>/dev/null || true
-          exit 0
 
-      - name: Assert ${{ matrix.leg }} leg ran and every case is as expected
-        run: |
-          log=artifacts/${{ matrix.leg }}.log
-          {
-            echo "### Leg: ${{ matrix.leg }}"
-            echo "| Case | Expected | Observed | As expected |"
-            echo "|---|---|---|---|"
-            grep '^REPRO-C02 leg=.* case=' "$log" | sed -E 's/^REPRO-C02 leg=[a-z]+ case=([A-Za-z]+) expected=([A-Za-z]+) observed=(.*) asExpected=(True|False)$/| \1 | \2 | `\3` | \4 |/'
-          } >> "$GITHUB_STEP_SUMMARY"
-          grep -q "REPRO-C02 leg=${{ matrix.leg }} DONE allAsExpected=True" "$log" || { echo "Marker missing or a case was not as expected"; exit 1; }
-          test "${{ steps.run.outputs.exit }}" = "0"
-
-      - name: Assert generated code contains the bad cast (bug leg only)
-        if: matrix.leg == 'bug'
+      - name: Assert the generated code contains the bad cast
+        shell: bash
         run: |
           f=$(find src/obj -name 'SingleLayoutChildPage.xaml.xsg.cs' | head -1)
           test -n "$f"
-          line=$(grep -F 'SetValue(global::Repro.Holder.ItemsProperty, (global::System.Collections.Generic.IList<global::Microsoft.Maui.Controls.View>)' "$f")
-          echo "$line"
-          test -n "$line"
           cp "$f" artifacts/
-          echo "Generated: \`$line\`" >> "$GITHUB_STEP_SUMMARY"
+          grep -F 'SetValue(global::Repro.Holder.ItemsProperty, (global::System.Collections.Generic.IList<global::Microsoft.Maui.Controls.View>)' "$f" | tee artifacts/bad-cast-line.txt
+          test -s artifacts/bad-cast-line.txt
+
+      - name: Assert every leg and write the summary
+        shell: bash
+        run: |
+          failed=0
+          leg_ok() { grep -q "REPRO-C02 leg=$1 DONE allAsExpected=True" "artifacts/$1.log" && test "$(cat artifacts/$1.exit)" = "0"; }
+          version=$(grep -o 'controlsVersion=.*' artifacts/bug.log | head -1 | cut -d= -f2-)
+          bug_total=$(grep -c '^REPRO-C02 leg=bug case=' artifacts/bug.log || true)
+          bug_hits=$(grep -c '^REPRO-C02 leg=bug case=.* asExpected=True' artifacts/bug.log || true)
+          control_total=$(grep -c '^REPRO-C02 leg=control case=' artifacts/control.log || true)
+          control_hits=$(grep -c '^REPRO-C02 leg=control case=.* asExpected=True' artifacts/control.log || true)
+          if leg_ok bug; then bug_verdict="REPRODUCED on Microsoft.Maui.Controls $version ($bug_hits/$bug_total threw InvalidCastException in InitializeComponent)"; else bug_verdict="NOT as expected ($bug_hits/$bug_total cases as expected)"; failed=1; fi
+          if leg_ok control; then control_verdict="CLEAN ($control_hits/$control_total added)"; else control_verdict="NOT as expected ($control_hits/$control_total cases as expected)"; failed=1; fi
+          if leg_ok workaround; then workaround_verdict="CLEAN (child added)"; else workaround_verdict="NOT as expected"; failed=1; fi
+          if [ $failed = 0 ]; then overall="bug shown AND control clean AND workaround clean: PASS"; else overall="FAIL"; fi
+          {
+            echo "## $overall"
+            echo
+            echo "- Bug leg: $bug_verdict"
+            echo "- Control leg: $control_verdict"
+            echo "- Workaround leg: $workaround_verdict"
+            echo "- dotnet --version: $(dotnet --version)"
+            echo
+            echo "| Leg | Case | Expected | Observed | As expected |"
+            echo "|---|---|---|---|---|"
+            grep -h '^REPRO-C02 leg=.* case=' artifacts/bug.log artifacts/control.log artifacts/workaround.log \
+              | sed -E 's/^REPRO-C02 leg=([a-z]+) case=([A-Za-z]+) expected=([A-Za-z]+) observed=(.*) asExpected=(True|False)$/| \1 | \2 | \3 | `` \4 `` | \5 |/'
+            echo
+            echo "### Stack of the SingleLayoutChildPage exception"
+            echo '```'
+            sed -n '/^REPRO-C02-STACK case=SingleLayoutChildPage$/,/^REPRO-C02-STACK-END case=SingleLayoutChildPage$/p' artifacts/bug.log | sed '1d;$d'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $failed
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: ${{ matrix.leg }}-results
+          name: results
           path: artifacts/
