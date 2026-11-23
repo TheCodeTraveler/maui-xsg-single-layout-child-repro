@@ -42,6 +42,7 @@ jobs:
           cp -r results ../artifacts/ 2>/dev/null || true
 
       - name: Assert the generated code contains the bad cast
+        id: badcast
         shell: bash
         run: |
           f=$(find src/obj -name 'SingleLayoutChildPage.xaml.xsg.cs' | head -1)
@@ -51,11 +52,17 @@ jobs:
           test -s artifacts/bad-cast-line.txt
 
       - name: Assert every leg and write the summary
+        if: always()
         shell: bash
+        env:
+          BADCAST_OUTCOME: ${{ steps.badcast.outcome }}
         run: |
           failed=0
           leg_ok() { grep -q "REPRO-C02 leg=$1 DONE allAsExpected=True" "artifacts/$1.log" && test "$(cat artifacts/$1.exit)" = "0"; }
-          version=$(grep -o 'controlsVersion=.*' artifacts/bug.log | head -1 | cut -d= -f2-)
+          version=$(grep -o 'controlsVersion=.*' artifacts/bug.log | head -1 | cut -d= -f2- || true)
+          version=${version:-unknown}
+          badcast_line=$(head -1 artifacts/bad-cast-line.txt 2>/dev/null || true)
+          if [ "$BADCAST_OUTCOME" = success ] && [ -n "$badcast_line" ]; then badcast_verdict="bad cast present (\`$badcast_line\`)"; else badcast_verdict="MISSING"; failed=1; fi
           bug_total=$(grep -c '^REPRO-C02 leg=bug case=' artifacts/bug.log || true)
           bug_hits=$(grep -c '^REPRO-C02 leg=bug case=.* asExpected=True' artifacts/bug.log || true)
           control_total=$(grep -c '^REPRO-C02 leg=control case=' artifacts/control.log || true)
@@ -63,11 +70,12 @@ jobs:
           if leg_ok bug; then bug_verdict="REPRODUCED on Microsoft.Maui.Controls $version ($bug_hits/$bug_total threw InvalidCastException in InitializeComponent)"; else bug_verdict="NOT as expected ($bug_hits/$bug_total cases as expected)"; failed=1; fi
           if leg_ok control; then control_verdict="CLEAN ($control_hits/$control_total added)"; else control_verdict="NOT as expected ($control_hits/$control_total cases as expected)"; failed=1; fi
           if leg_ok workaround; then workaround_verdict="CLEAN (child added)"; else workaround_verdict="NOT as expected"; failed=1; fi
-          if [ $failed = 0 ]; then overall="bug shown AND control clean AND workaround clean: PASS"; else overall="FAIL"; fi
+          if [ $failed = 0 ]; then overall="bug shown (run time + generated code) AND control clean AND workaround clean: PASS"; else overall="FAIL"; fi
           {
             echo "## $overall"
             echo
             echo "- Bug leg: $bug_verdict"
+            echo "- Generated code: $badcast_verdict"
             echo "- Control leg: $control_verdict"
             echo "- Workaround leg: $workaround_verdict"
             echo "- dotnet --version: $(dotnet --version)"
