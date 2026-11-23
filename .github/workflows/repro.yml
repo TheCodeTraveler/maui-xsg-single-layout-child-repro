@@ -1,0 +1,68 @@
+name: repro
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  leg:
+    name: ${{ matrix.leg }} leg
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [bug, control, workaround]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK from global.json
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore src/Repro.csproj
+
+      - name: Build
+        run: dotnet build src/Repro.csproj -c Release --no-restore
+
+      - name: Run ${{ matrix.leg }} leg
+        id: run
+        working-directory: src
+        run: |
+          set +e
+          mkdir -p ../artifacts
+          dotnet run -c Release --no-build -- ${{ matrix.leg }} 2>&1 | tee ../artifacts/${{ matrix.leg }}.log
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          cp -r results ../artifacts/ 2>/dev/null || true
+          exit 0
+
+      - name: Assert ${{ matrix.leg }} leg ran and every case is as expected
+        run: |
+          log=artifacts/${{ matrix.leg }}.log
+          {
+            echo "### Leg: ${{ matrix.leg }}"
+            echo "| Case | Expected | Observed | As expected |"
+            echo "|---|---|---|---|"
+            grep '^REPRO-C02 leg=.* case=' "$log" | sed -E 's/^REPRO-C02 leg=[a-z]+ case=([A-Za-z]+) expected=([A-Za-z]+) observed=(.*) asExpected=(True|False)$/| \1 | \2 | `\3` | \4 |/'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q "REPRO-C02 leg=${{ matrix.leg }} DONE allAsExpected=True" "$log" || { echo "Marker missing or a case was not as expected"; exit 1; }
+          test "${{ steps.run.outputs.exit }}" = "0"
+
+      - name: Assert generated code contains the bad cast (bug leg only)
+        if: matrix.leg == 'bug'
+        run: |
+          f=$(find src/obj -name 'SingleLayoutChildPage.xaml.xsg.cs' | head -1)
+          test -n "$f"
+          line=$(grep -F 'SetValue(global::Repro.Holder.ItemsProperty, (global::System.Collections.Generic.IList<global::Microsoft.Maui.Controls.View>)' "$f")
+          echo "$line"
+          test -n "$line"
+          cp "$f" artifacts/
+          echo "Generated: \`$line\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.leg }}-results
+          path: artifacts/
