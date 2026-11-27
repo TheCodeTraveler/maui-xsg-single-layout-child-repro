@@ -31,8 +31,8 @@ The run is green only when the `bug` leg shows the bug and the other legs are cl
 
 No fix leg: the defect is in the generator (`Microsoft.Maui.Controls.SourceGen`), which user code cannot patch. Workarounds: wrap the child in a `ContentView`, or use `Inflator="XamlC"` (deprecated in .NET 11).
 
-CI: (run link added after the first run)
-Upstream issue: (to be filed)
+CI: https://github.com/TheCodeTraveler/maui-xsg-single-layout-child-repro/actions/runs/45237704503 (green = bug reproduced)
+Upstream issue: https://github.com/dotnet/maui/issues/40681
 
 ## Root cause and recommended fix
 
